@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Tema mínimo para el Activity contenedor de Compose. El theming real lo hace AppTheme en Compose. -->
-    <style name="Theme.CompensaTuViaje" parent="android:Theme.Material.NoTitleBar" />
+    <style name="Theme.CompensaTuViaje" parent="android:Theme.Material.Light.NoActionBar" />
 </resources>
