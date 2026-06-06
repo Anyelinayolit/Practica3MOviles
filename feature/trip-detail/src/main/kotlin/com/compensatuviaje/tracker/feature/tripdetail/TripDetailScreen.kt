@@ -9,8 +9,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.compensatuviaje.tracker.designsystem.LoadingState
+import com.compensatuviaje.tracker.designsystem.ErrorState
+import com.compensatuviaje.tracker.designsystem.AppTheme
 import com.compensatuviaje.tracker.domain.TripRepository
 import com.compensatuviaje.tracker.model.Trip
 import com.compensatuviaje.tracker.model.TripStatus
@@ -33,7 +37,23 @@ sealed interface TripDetailUiState {
 }
 
 // =======================================================
-// 2. VIEWMODEL
+// 2. PARSEO DE FECHAS TOLERANTE A FALLOS
+// =======================================================
+private fun parseIsoDate(isoString: String): Instant {
+    return try {
+        Instant.parse(isoString)
+    } catch (e: Exception) {
+        try {
+            java.time.LocalDateTime.parse(isoString)
+                .toInstant(java.time.ZoneOffset.UTC)
+        } catch (ex: Exception) {
+            Instant.EPOCH
+        }
+    }
+}
+
+// =======================================================
+// 3. VIEWMODEL
 // =======================================================
 class TripDetailViewModel(
     private val tripRepository: TripRepository,
@@ -47,7 +67,7 @@ class TripDetailViewModel(
         loadTripDetails()
     }
 
-    private fun loadTripDetails() {
+    fun loadTripDetails() {
         viewModelScope.launch {
             try {
                 val trip = tripRepository.get(tripId)
@@ -66,8 +86,8 @@ class TripDetailViewModel(
     private fun calculateDuration(startIso: String, endIso: String?): String {
         if (endIso == null) return "En progreso"
         return try {
-            val start = Instant.parse(startIso)
-            val end = Instant.parse(endIso)
+            val start = parseIsoDate(startIso)
+            val end = parseIsoDate(endIso)
             val duration = Duration.between(start, end)
             val hours = duration.toHours()
             val minutes = duration.toMinutes() % 60
@@ -79,43 +99,34 @@ class TripDetailViewModel(
 }
 
 // =======================================================
-// 3. PANTALLA EN JETPACK COMPOSE
+// 4. PANTALLA EN JETPACK COMPOSE (SCREEN CONTENEDORA)
 // =======================================================
 @Composable
 fun TripDetailScreen(
     tripId: String,
-    viewModel: TripDetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
-        factory = object : androidx.lifecycle.ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                val fakeTripRepository = object : TripRepository {
-                    override fun activeTrip(): Flow<Trip?> = flowOf(null)
-                    override fun completedTrips(): Flow<List<Trip>> = flowOf(emptyList())
-                    override suspend fun create(trip: Trip) {}
-                    override suspend fun update(trip: Trip) {}
-                    override suspend fun setStatus(tripId: String, status: TripStatus) {}
-                    override suspend fun get(tripId: String): Trip? {
-                        return if (tripId == "preview_id") {
-                            Trip(
-                                id = "preview_id",
-                                status = TripStatus.COMPLETED,
-                                startedAtIso = "2026-06-05T08:00:00Z",
-                                endedAtIso = "2026-06-05T09:30:00Z",
-                                totalLocalDistanceKm = 42.8,
-                                isSyncedToServer = true,
-                                co2Kg = 8.4
-                            )
-                        } else null
-                    }
-                }
-                return TripDetailViewModel(fakeTripRepository, tripId) as T
-            }
-        }
-    ),
+    viewModel: TripDetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
+    TripDetailContent(
+        tripId = tripId,
+        uiState = uiState,
+        onRetry = { viewModel.loadTripDetails() },
+        modifier = modifier
+    )
+}
+
+// =======================================================
+// 5. COMPOSABLE PURO (STATE-HOISTING)
+// =======================================================
+@Composable
+fun TripDetailContent(
+    tripId: String,
+    uiState: TripDetailUiState,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
@@ -130,22 +141,18 @@ fun TripDetailScreen(
                 .padding(16.dp),
             contentAlignment = Alignment.Center
         ) {
-            when (val state = uiState) {
-                is TripDetailUiState.Loading -> CircularProgressIndicator()
+            when (uiState) {
+                is TripDetailUiState.Loading -> LoadingState()
 
                 is TripDetailUiState.ErrorNotFound -> {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "Error: El viaje seleccionado no existe.",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Text(text = "ID buscado: $tripId", style = MaterialTheme.typography.bodyMedium)
-                    }
+                    ErrorState(
+                        text = "Error: El viaje seleccionado no existe (ID: $tripId).",
+                        onRetry = onRetry
+                    )
                 }
 
                 is TripDetailUiState.Success -> {
-                    val trip = state.trip
+                    val trip = uiState.trip
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
@@ -177,7 +184,7 @@ fun TripDetailScreen(
 
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                     Text("Duración Estimada:", style = MaterialTheme.typography.bodyMedium)
-                                    Text(state.durationText, style = MaterialTheme.typography.bodyLarge)
+                                    Text(uiState.durationText, style = MaterialTheme.typography.bodyLarge)
                                 }
 
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -195,5 +202,43 @@ fun TripDetailScreen(
                 }
             }
         }
+    }
+}
+
+// =======================================================
+// 6. PREVIEWS CON ESTADOS ESTÁTICOS
+// =======================================================
+@Preview(showBackground = true)
+@Composable
+fun TripDetailContentSuccessPreview() {
+    AppTheme {
+        TripDetailContent(
+            tripId = "preview_id",
+            uiState = TripDetailUiState.Success(
+                trip = Trip(
+                    id = "preview_id",
+                    status = TripStatus.COMPLETED,
+                    startedAtIso = "2026-06-05T08:00:00Z",
+                    endedAtIso = "2026-06-05T09:30:00Z",
+                    totalLocalDistanceKm = 42.8,
+                    isSyncedToServer = true,
+                    co2Kg = 8.4
+                ),
+                durationText = "1h 30m"
+            ),
+            onRetry = {}
+        )
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun TripDetailContentNotFoundPreview() {
+    AppTheme {
+        TripDetailContent(
+            tripId = "invalid_id",
+            uiState = TripDetailUiState.ErrorNotFound,
+            onRetry = {}
+        )
     }
 }

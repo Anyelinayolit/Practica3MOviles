@@ -5,12 +5,20 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.compensatuviaje.tracker.designsystem.LoadingState
+import com.compensatuviaje.tracker.designsystem.EmptyState
+import com.compensatuviaje.tracker.designsystem.AppTheme
 import com.compensatuviaje.tracker.domain.TripRepository
 import com.compensatuviaje.tracker.model.Trip
 import kotlinx.coroutines.flow.*
@@ -23,7 +31,7 @@ import java.time.Instant
 // =======================================================
 sealed interface HistoryUiState {
     object Loading : HistoryUiState
-    object Empty : HistoryUiState // Criterio: Estado vacío
+    object Empty : HistoryUiState
     data class Success(val trips: List<Trip>) : HistoryUiState
 }
 
@@ -49,7 +57,6 @@ class HistoryViewModel(
                     if (tripList.isEmpty()) {
                         _uiState.value = HistoryUiState.Empty
                     } else {
-                        // Criterio: Lista ordenada por fecha (descendente: más nuevos primero)
                         val sortedTrips = tripList.sortedByDescending { it.startedAtIso }
                         _uiState.value = HistoryUiState.Success(sortedTrips)
                     }
@@ -59,36 +66,32 @@ class HistoryViewModel(
 }
 
 // =======================================================
-// 3. PANTALLA EN JETPACK COMPOSE
+// 3. PANTALLA EN JETPACK COMPOSE (SCREEN CONTENEDORA)
 // =======================================================
 @Composable
 fun HistoryScreen(
-    viewModel: HistoryViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
-        factory = object : androidx.lifecycle.ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                val fakeTripRepository = object : TripRepository {
-                    override fun activeTrip() = flowOf(null)
-                    override fun completedTrips(): Flow<List<Trip>> = flowOf(
-                        listOf(
-                            Trip(id = "local_uuid_777", status = com.compensatuviaje.tracker.model.TripStatus.COMPLETED, startedAtIso = "2026-06-05T08:00:00Z", endedAtIso = "2026-06-05T10:15:00Z", totalLocalDistanceKm = 85.4, isSyncedToServer = true, co2Kg = 15.2),
-                            Trip(id = "local_uuid_888", status = com.compensatuviaje.tracker.model.TripStatus.COMPLETED, startedAtIso = "2026-06-04T14:00:00Z", endedAtIso = "2026-06-04T14:45:00Z", totalLocalDistanceKm = 32.1, isSyncedToServer = false)
-                        )
-                    )
-                    override suspend fun create(trip: Trip) {}
-                    override suspend fun update(trip: Trip) {}
-                    override suspend fun setStatus(tripId: String, status: com.compensatuviaje.tracker.model.TripStatus) {}
-                    override suspend fun get(tripId: String): Trip? = null
-                }
-                return HistoryViewModel(fakeTripRepository) as T
-            }
-        }
-    ),
+    viewModel: HistoryViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
     modifier: Modifier = Modifier,
-    onNavigateToDetail: (String) -> Unit = {} // Criterio: Tap -> detalle
+    onNavigateToDetail: (String) -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
+    HistoryContent(
+        uiState = uiState,
+        onNavigateToDetail = onNavigateToDetail,
+        modifier = modifier
+    )
+}
+
+// =======================================================
+// 4. COMPOSABLE PURO (STATE-HOISTING)
+// =======================================================
+@Composable
+fun HistoryContent(
+    uiState: HistoryUiState,
+    onNavigateToDetail: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
@@ -103,18 +106,17 @@ fun HistoryScreen(
                 .padding(16.dp),
             contentAlignment = Alignment.Center
         ) {
-            when (val state = uiState) {
-                is HistoryUiState.Loading -> CircularProgressIndicator()
+            when (uiState) {
+                is HistoryUiState.Loading -> LoadingState()
                 is HistoryUiState.Empty -> {
-                    Text("No tienes viajes completados en el historial.", style = MaterialTheme.typography.bodyLarge)
+                    EmptyState(text = "No tienes viajes completados en el historial.")
                 }
                 is HistoryUiState.Success -> {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(state.trips) { trip ->
-                            // Criterio de Aceptación: Tap -> detalle conectado mediante el onClick
+                        items(uiState.trips) { trip ->
                             TripHistoryItem(trip = trip, onClick = { onNavigateToDetail(trip.id) })
                         }
                     }
@@ -124,9 +126,11 @@ fun HistoryScreen(
     }
 }
 
+// =======================================================
+// 5. ELEMENTO DE LA LISTA CON INDICADOR DE SINCRONIZACIÓN
+// =======================================================
 @Composable
 fun TripHistoryItem(trip: Trip, onClick: () -> Unit) {
-    // Cálculo Dinámico de la duración (Criterio: Muestra distancia y duración)
     val durationText = remember(trip.startedAtIso, trip.endedAtIso) {
         if (trip.endedAtIso != null) {
             try {
@@ -147,10 +151,10 @@ fun TripHistoryItem(trip: Trip, onClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() } // Criterio: Tap -> detalle
+            .clickable { onClick() }
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(text = "ID: ${trip.id}", style = MaterialTheme.typography.titleMedium)
                 Text(
                     text = trip.startedAtIso.substringBefore("T"),
@@ -161,7 +165,6 @@ fun TripHistoryItem(trip: Trip, onClick: () -> Unit) {
 
             HorizontalDivider(thickness = 0.5.dp)
 
-            // Criterios cumplidos: Distancia y Duración mostrados explícitamente en paralelo
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
                     Text(text = "Distancia", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -172,6 +175,72 @@ fun TripHistoryItem(trip: Trip, onClick: () -> Unit) {
                     Text(text = durationText, style = MaterialTheme.typography.bodyLarge)
                 }
             }
+
+            HorizontalDivider(thickness = 0.5.dp)
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Start,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (trip.isSyncedToServer) {
+                    Icon(
+                        imageVector = Icons.Default.CloudDone,
+                        contentDescription = "Sincronizado al servidor",
+                        tint = Color(0xFF4CAF50),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Sincronizado",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF4CAF50)
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.CloudUpload,
+                        contentDescription = "Pendiente de sincronizar",
+                        tint = Color(0xFFFF9800),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Pendiente",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFFF9800)
+                    )
+                }
+            }
         }
+    }
+}
+
+// =======================================================
+// 6. PREVIEWS CON ESTADOS ESTÁTICOS
+// =======================================================
+@Preview(showBackground = true)
+@Composable
+fun HistoryContentSuccessPreview() {
+    AppTheme {
+        HistoryContent(
+            uiState = HistoryUiState.Success(
+                listOf(
+                    Trip(id = "viaje_123", status = com.compensatuviaje.tracker.model.TripStatus.COMPLETED, startedAtIso = "2026-06-05T08:00:00Z", endedAtIso = "2026-06-05T10:15:00Z", totalLocalDistanceKm = 85.4, isSyncedToServer = true),
+                    Trip(id = "viaje_456", status = com.compensatuviaje.tracker.model.TripStatus.COMPLETED, startedAtIso = "2026-06-04T14:00:00Z", endedAtIso = "2026-06-04T14:45:00Z", totalLocalDistanceKm = 32.1, isSyncedToServer = false)
+                )
+            ),
+            onNavigateToDetail = {}
+        )
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun HistoryContentEmptyPreview() {
+    AppTheme {
+        HistoryContent(
+            uiState = HistoryUiState.Empty,
+            onNavigateToDetail = {}
+        )
     }
 }

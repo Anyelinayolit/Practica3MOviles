@@ -6,10 +6,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.compensatuviaje.tracker.designsystem.BigActionButton
+import com.compensatuviaje.tracker.designsystem.LoadingState
+import com.compensatuviaje.tracker.designsystem.EmptyState
+import com.compensatuviaje.tracker.designsystem.ErrorState
+import com.compensatuviaje.tracker.designsystem.AppTheme
 import com.compensatuviaje.tracker.domain.SessionRepository
 import com.compensatuviaje.tracker.domain.TripRepository
+import com.compensatuviaje.tracker.model.TripStatus
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -18,7 +25,12 @@ import kotlinx.coroutines.launch
 // =======================================================
 sealed interface VehicleUiState {
     object Loading : VehicleUiState
-    data class Success(val plate: String, val category: String) : VehicleUiState
+    data class Success(
+        val plate: String,
+        val category: String,
+        val isProcessing: Boolean = false,
+        val errorMessage: String? = null
+    ) : VehicleUiState
     object EmptyData : VehicleUiState
     object NavigateToHome : VehicleUiState
 }
@@ -56,57 +68,38 @@ class VehicleViewModel(
     }
 
     fun confirmVehicle() {
+        val currentState = _uiState.value as? VehicleUiState.Success ?: return
+        if (currentState.isProcessing) return
+
+        _uiState.value = currentState.copy(isProcessing = true, errorMessage = null)
+
         viewModelScope.launch {
             try {
-                // CAMBIO CLAVE PARA LA CONEXIÓN REAL: .first() espera el valor real de la BD de Room
                 val currentTrip = tripRepository.activeTrip().first()
                 if (currentTrip != null) {
-                    tripRepository.update(currentTrip)
+                    val updatedTrip = currentTrip.copy(
+                        status = TripStatus.IN_PROGRESS,
+                        isSyncedToServer = false
+                    )
+                    tripRepository.update(updatedTrip)
                 }
                 _uiState.value = VehicleUiState.NavigateToHome
             } catch (e: Exception) {
-                _uiState.value = VehicleUiState.EmptyData
+                _uiState.value = currentState.copy(
+                    isProcessing = false,
+                    errorMessage = "Error al confirmar el vehículo: ${e.message}"
+                )
             }
         }
     }
 }
 
 // =======================================================
-// 3. PANTALLA EN JETPACK COMPOSE
+// 3. PANTALLA EN JETPACK COMPOSE (SCREEN CONTENEDORA)
 // =======================================================
 @Composable
 fun VehicleScreen(
-    viewModel: VehicleViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
-        factory = object : androidx.lifecycle.ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                val fakeSession = object : SessionRepository {
-                    override val current: Flow<com.compensatuviaje.tracker.model.Session?> = flowOf(
-                        com.compensatuviaje.tracker.model.Session(
-                            token = "fake_jwt",
-                            driverName = "Chofer Flota",
-                            truck = com.compensatuviaje.tracker.model.Truck(
-                                id = "1",
-                                licensePlate = "ABC-123",
-                                category = "Carga Pesada"
-                            )
-                        )
-                    )
-                    override suspend fun setSession(session: com.compensatuviaje.tracker.model.Session) {}
-                    override suspend fun logout() {}
-                }
-                val fakeTrip = object : TripRepository {
-                    override fun activeTrip(): Flow<com.compensatuviaje.tracker.model.Trip?> = flowOf(null)
-                    override fun completedTrips(): Flow<List<com.compensatuviaje.tracker.model.Trip>> = flowOf(emptyList())
-                    override suspend fun create(trip: com.compensatuviaje.tracker.model.Trip) {}
-                    override suspend fun update(trip: com.compensatuviaje.tracker.model.Trip) {}
-                    override suspend fun setStatus(tripId: String, status: com.compensatuviaje.tracker.model.TripStatus) {}
-                    override suspend fun get(tripId: String): com.compensatuviaje.tracker.model.Trip? = null
-                }
-                return VehicleViewModel(fakeSession, fakeTrip) as T
-            }
-        }
-    ),
+    viewModel: VehicleViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
     modifier: Modifier = Modifier,
     onNavigateToHome: () -> Unit = {}
 ) {
@@ -126,51 +119,83 @@ fun VehicleScreen(
     ) {
         when (val state = uiState) {
             is VehicleUiState.Loading -> {
-                CircularProgressIndicator()
+                LoadingState()
             }
             is VehicleUiState.EmptyData -> {
-                Text(
-                    text = "No se encontraron datos del vehículo activo en la sesión.",
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyLarge
-                )
+                EmptyState(text = "No se encontraron datos del vehículo activo en la sesión.")
             }
             is VehicleUiState.Success -> {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(24.dp)
-                ) {
-                    Text(
-                        text = "Confirmación de Vehículo",
-                        style = MaterialTheme.typography.headlineMedium
-                    )
-
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(modifier = Modifier.padding(24.dp)) {
-                            Text(text = "Patente / Placa:", style = MaterialTheme.typography.labelLarge)
-                            Text(text = state.plate, style = MaterialTheme.typography.titleLarge)
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text(text = "Categoría / Tipo:", style = MaterialTheme.typography.labelLarge)
-                            Text(text = state.category, style = MaterialTheme.typography.titleMedium)
-                        }
-                    }
-
-                    Button(
-                        onClick = { viewModel.confirmVehicle() },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 56.dp)
-                    ) {
-                        Text(
-                            text = "Confirmar y Continuar",
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-                    }
-                }
+                VehicleContent(
+                    state = state,
+                    onConfirmClick = { viewModel.confirmVehicle() }
+                )
             }
-            // Evita el error en la interfaz sellada
             else -> {}
+        }
+    }
+}
+
+// =======================================================
+// 4. COMPOSABLE PURO (STATE-HOISTING)
+// =======================================================
+@Composable
+fun VehicleContent(
+    state: VehicleUiState.Success,
+    onConfirmClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(24.dp)
+    ) {
+        Text(
+            text = "Confirmación de Vehículo",
+            style = MaterialTheme.typography.headlineMedium
+        )
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                Text(text = "Patente / Placa:", style = MaterialTheme.typography.labelLarge)
+                Text(text = state.plate, style = MaterialTheme.typography.titleLarge)
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(text = "Categoría / Tipo:", style = MaterialTheme.typography.labelLarge)
+                Text(text = state.category, style = MaterialTheme.typography.titleMedium)
+            }
+        }
+
+        if (state.errorMessage != null) {
+            ErrorState(
+                text = state.errorMessage,
+                onRetry = onConfirmClick
+            )
+        } else if (state.isProcessing) {
+            LoadingState()
+        } else {
+            BigActionButton(
+                text = "Confirmar y Continuar",
+                onClick = onConfirmClick
+            )
+        }
+    }
+}
+
+// =======================================================
+// 5. PREVIEW CON ESTADOS ESTÁTICOS
+// =======================================================
+@Preview(showBackground = true)
+@Composable
+fun VehicleContentPreview() {
+    AppTheme {
+        Box(modifier = Modifier.padding(16.dp)) {
+            VehicleContent(
+                state = VehicleUiState.Success(
+                    plate = "ABC-123",
+                    category = "Carga Pesada",
+                    isProcessing = false
+                ),
+                onConfirmClick = {}
+            )
         }
     }
 }
