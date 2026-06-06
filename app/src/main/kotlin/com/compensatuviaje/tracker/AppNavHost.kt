@@ -18,7 +18,7 @@ import com.compensatuviaje.tracker.feature.vehicle.VehicleScreen
 @Composable
 fun AppNavHost() {
     val navController = rememberNavController()
-    NavHost(navController = navController, startDestination = "onboarding") {
+    NavHost(navController = navController, startDestination = "history") {
         composable("onboarding") { OnboardingScreen() }
         composable("auth") { AuthScreen() }
         composable("vehicle") { VehicleScreen() }
